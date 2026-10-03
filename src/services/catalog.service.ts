@@ -143,7 +143,10 @@ async function resolveCategoryPath(path: string) {
   const trail: { slug: string; name: string }[] = [];
   for (let c: (typeof all)[number] | undefined = cat; c; c = all.find((x) => x.id === c!.parentId)) trail.unshift({ slug: c.slug, name: c.name });
   const children = all.filter((c) => c.parentId === cat.id).map((c) => ({ slug: c.slug, name: c.name }));
-  return { category: { slug: cat.slug, name: cat.name, description: cat.description, sizeMode: cat.sizeMode }, ids, trail, children };
+  // Sub-categories without their own intro inherit the nearest ancestor's.
+  let description = cat.description;
+  for (let c = all.find((x) => x.id === cat.parentId); !description && c; c = all.find((x) => x.id === c!.parentId)) description = c.description;
+  return { category: { slug: cat.slug, name: cat.name, description, sizeMode: cat.sizeMode }, ids, trail, children };
 }
 
 // ─── Listing filters ────────────────────────────────────────────────────────
@@ -317,14 +320,17 @@ export async function productDetail(slug: string, opts: { includeUnpublished?: b
 
 /** Full-text search over name/code/description + fabric/colour/category names. */
 export async function search(qRaw: string, q: ListingQuery) {
+  // Words keep inner hyphens ("3-piece") for LIKE matching; the tsquery is built
+  // only from alphanumeric tokens so no user input can produce tsquery syntax.
   const words = qRaw
     .toLowerCase()
     .split(/\s+/)
-    .map((w) => w.replace(/[^a-z0-9-]/g, '').replace(/s$/, ''))
+    .map((w) => w.replace(/[^a-z0-9-]/g, '').replace(/^-+|-+$/g, '').replace(/s$/, ''))
     .filter((w) => w.length >= 2)
     .slice(0, 8);
   if (!words.length) return { query: qRaw, ...applyListing([], q) };
-  const tsQuery = words.map((w) => `${w.replace(/-/g, ' & ')}:*`).join(' & ');
+  const tokens = words.flatMap((w) => w.split('-')).filter(Boolean);
+  const tsQuery = tokens.map((t) => `${t}:*`).join(' & ');
   const like = words.map((w) => `%${w}%`);
   // Each word must match the text index OR an attribute / category name.
   const ids = await prisma().$queryRaw<{ id: string }[]>`

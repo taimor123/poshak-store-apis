@@ -35,6 +35,7 @@ services:
       JWT_SECRET: dev-only-jwt-secret-change-me-0123456789abcdef
       GUEST_TOKEN_SECRET: dev-only-guest-secret-change-me-0123456789abcdef
       COOKIE_SECURE: "false"
+      INTERNAL_PROXY_SECRET: dev-only-proxy-secret-change-me-0123456789abcdef
       RUN_MIGRATIONS: "true"
       SEED_ON_START: "true"
       SEED_ADMIN_EMAIL: admin@poshak.pk

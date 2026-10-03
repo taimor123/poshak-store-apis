@@ -27,6 +27,12 @@ const EnvSchema = z.object({
   CLOUDINARY_CLOUD_NAME: z.string().optional().transform((v) => v || undefined),
   CLOUDINARY_API_KEY: z.string().optional().transform((v) => v || undefined),
   CLOUDINARY_API_SECRET: z.string().optional().transform((v) => v || undefined),
+  /**
+   * Shared secret with poshak-store-app. The app calls the API from its server,
+   * so it forwards the shopper's IP in x-poshak-client-ip; the API trusts that
+   * header only when x-poshak-proxy-secret matches. Unset → use the socket IP.
+   */
+  INTERNAL_PROXY_SECRET: z.string().min(32, 'INTERNAL_PROXY_SECRET must be at least 32 characters').optional().or(z.literal('').transform(() => undefined)),
   /** Disable the in-process cron (tests, or a second instance). */
   DISABLE_CRON: bool,
 });

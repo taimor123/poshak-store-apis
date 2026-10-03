@@ -19,7 +19,7 @@ export function resetRateLimits() {
   hits.clear();
 }
 
-export const rateLimit = (name: string, limit: number, windowMs: number, keyOf: (req: Request) => string = (req) => req.ip ?? 'unknown'): RequestHandler =>
+export const rateLimit = (name: string, limit: number, windowMs: number, keyOf: (req: Request) => string = (req) => req.clientIp ?? req.ip ?? 'unknown'): RequestHandler =>
   (req, _res, next) => {
     if (!hit(`${name}:${keyOf(req)}`, limit, windowMs)) return next(new RateLimitedError());
     next();

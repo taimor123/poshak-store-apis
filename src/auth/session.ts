@@ -14,6 +14,10 @@ const ANON_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type Role = 'CUSTOMER' | 'ADMIN';
 export type SessionClaims = { sub: string; role: Role; sv: number };
+export type VerifiedClaims = SessionClaims & { iat: number };
+
+/** Customer sessions are re-issued once they're a day old, so 30 days of inactivity — not 30 days total — signs you out. */
+export const shouldRoll = (c: VerifiedClaims) => c.role === 'CUSTOMER' && Date.now() / 1000 - c.iat > 24 * 60 * 60;
 
 const key = () => new TextEncoder().encode(env().JWT_SECRET);
 
@@ -40,11 +44,11 @@ export function clearSession(res: Response) {
   res.clearCookie(SESSION_COOKIE, baseCookie());
 }
 
-export async function verifySessionToken(token: string): Promise<SessionClaims | null> {
+export async function verifySessionToken(token: string): Promise<VerifiedClaims | null> {
   try {
     const { payload } = await jwtVerify(token, key(), { algorithms: ['HS256'] });
     if (typeof payload.sub !== 'string' || (payload.role !== 'CUSTOMER' && payload.role !== 'ADMIN') || typeof payload.sv !== 'number') return null;
-    return { sub: payload.sub, role: payload.role, sv: payload.sv };
+    return { sub: payload.sub, role: payload.role, sv: payload.sv, iat: payload.iat ?? 0 };
   } catch {
     return null;
   }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { guestTokenFor, isValidGuestToken } from '../../src/auth/guestToken.js';
 import { passwordProblem } from '../../src/auth/password.js';
 import { loadEnv } from '../../src/config/env.js';
+import { shouldRoll } from '../../src/auth/session.js';
 import { lockoutFor } from '../../src/services/auth.service.js';
 import { applyListing, type ProductCard } from '../../src/services/catalog.service.js';
 import { canTransition } from '../../src/services/order.service.js';
@@ -94,6 +95,13 @@ describe('auth rules', () => {
     expect(passwordProblem('password123')).toMatch(/too common/);
     expect(passwordProblem('ayeshakhan2026', 'ayeshakhan@x.pk')).toMatch(/email/);
     expect(passwordProblem('mint-chai-on-sunday')).toBeNull();
+  });
+
+  it('customer sessions roll after a day; admin sessions never do', () => {
+    const now = Date.now() / 1000;
+    expect(shouldRoll({ sub: 'u', role: 'CUSTOMER', sv: 0, iat: now - 2 * 86400 })).toBe(true);
+    expect(shouldRoll({ sub: 'u', role: 'CUSTOMER', sv: 0, iat: now - 3600 })).toBe(false);
+    expect(shouldRoll({ sub: 'u', role: 'ADMIN', sv: 0, iat: now - 2 * 86400 })).toBe(false);
   });
 
   it('guest tokens are per-order and constant-time checked', () => {

@@ -7,6 +7,7 @@ import { pinoHttp } from 'pino-http';
 import type { Env } from './config/env.js';
 import { logger } from './logger.js';
 import { errorHandler, notFound } from './http/middleware/error.js';
+import { clientIpMiddleware } from './http/middleware/clientIp.js';
 import { sessionMiddleware } from './http/middleware/session.js';
 import { accountRouter } from './routes/account.routes.js';
 import { adminRouter } from './routes/admin.routes.js';
@@ -42,6 +43,7 @@ export function createApp(env: Env) {
   app.use(cors({ origin: env.WEB_ORIGIN, credentials: true, exposedHeaders: ['x-request-id'] }));
   app.use(express.json({ limit: '100kb' }));
   app.use(cookieParser());
+  app.use(clientIpMiddleware);
   app.use(sessionMiddleware);
 
   app.use('/health', healthRouter);

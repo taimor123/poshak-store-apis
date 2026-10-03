@@ -1,5 +1,5 @@
 import type { RequestHandler } from 'express';
-import { SESSION_COOKIE, clearSession, verifySessionToken } from '../../auth/session.js';
+import { SESSION_COOKIE, clearSession, issueSession, shouldRoll, verifySessionToken } from '../../auth/session.js';
 import { resolveSessionUser } from '../../services/auth.service.js';
 
 /**
@@ -11,7 +11,9 @@ export const sessionMiddleware: RequestHandler = async (req, res, next) => {
   if (!token) return next();
   const claims = await verifySessionToken(token);
   const user = claims ? await resolveSessionUser(claims) : null;
-  if (user) req.user = user;
-  else clearSession(res);
+  if (user && claims) {
+    req.user = user;
+    if (shouldRoll(claims)) await issueSession(res, { sub: claims.sub, role: claims.role, sv: claims.sv });
+  } else clearSession(res);
   next();
 };

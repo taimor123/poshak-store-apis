@@ -21,6 +21,7 @@ export default defineConfig({
       SITE_URL: 'http://localhost:3000',
       COOKIE_SECURE: 'false',
       DISABLE_CRON: 'true',
+      INTERNAL_PROXY_SECRET: 'test-proxy-secret-0123456789abcdef0123456789',
       RESEND_API_KEY: '',
     },
   },
