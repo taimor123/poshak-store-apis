@@ -1,9 +1,5 @@
-import { defineConfig } from 'vitest/config'
+import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
-  test: {
-    environment: 'node',
-    exclude: ['dist/**', 'node_modules/**'],
-    testTimeout: 20000,
-  },
-})
+  test: { environment: 'node', include: ['test/**/*.test.ts'], env: { LOG_LEVEL: 'silent' } },
+});
