@@ -22,7 +22,8 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:purge-demo": "tsx prisma/seed.ts --purge-demo",
     "db:reset": "prisma migrate reset --force",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "db:attach-images": "tsx prisma/attach-images.ts"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.2.1",
