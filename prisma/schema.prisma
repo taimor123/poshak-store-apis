@@ -1,0 +1,672 @@
+// Implements docs/DATABASE/DATABASE_SCHEMA.md — the doc is the reference; drift is a review-blocker.
+// Money = integer paisa (suffix Paisa). Measurements = Decimal(4,1) inches. Time = timestamptz.
+// CHECK constraints, the search tsvector and partial indexes live in hand-written migration SQL.
+
+generator client {
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
+  moduleFormat           = "esm"
+  importFileExtension    = "js"
+  generatedFileExtension = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Identity ───────────────────────────────────────────────────────────────
+
+enum Role {
+  CUSTOMER
+  ADMIN
+}
+
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  phone           String?
+  passwordHash    String?
+  name            String
+  role            Role      @default(CUSTOMER)
+  emailVerifiedAt DateTime? @db.Timestamptz
+  googleId        String?   @unique
+  /// Bumped on password change / "log out everywhere" — invalidates older JWTs.
+  sessionVersion  Int       @default(0)
+  failedLogins    Int       @default(0)
+  lockedUntil     DateTime? @db.Timestamptz
+  createdAt       DateTime  @default(now()) @db.Timestamptz
+  updatedAt       DateTime  @updatedAt @db.Timestamptz
+
+  addresses   Address[]
+  cart        Cart?
+  orders      Order[]
+  resetTokens PasswordResetToken[]
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  /// SHA-256 of the token; the raw token only ever exists in the email link.
+  tokenHash String    @unique
+  expiresAt DateTime  @db.Timestamptz
+  usedAt    DateTime? @db.Timestamptz
+  createdAt DateTime  @default(now()) @db.Timestamptz
+  updatedAt DateTime  @updatedAt @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Address {
+  id         String   @id @default(cuid())
+  userId     String
+  name       String
+  phone      String
+  line1      String
+  city       String
+  province   String?
+  postalCode String?
+  notes      String?
+  isDefault  Boolean  @default(false)
+  createdAt  DateTime @default(now()) @db.Timestamptz
+  updatedAt  DateTime @updatedAt @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─── Taxonomy & sizing ──────────────────────────────────────────────────────
+
+enum SizeMode {
+  STITCHED
+  UNSTITCHED
+  NONE
+}
+
+model Category {
+  id             String   @id @default(cuid())
+  parentId       String?
+  name           String
+  slug           String   @unique
+  description    String?
+  sortOrder      Int      @default(0)
+  sizeMode       SizeMode
+  sizeChartId    String?
+  attributeSetId String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now()) @db.Timestamptz
+  updatedAt      DateTime @updatedAt @db.Timestamptz
+
+  parent       Category?     @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children     Category[]    @relation("CategoryTree")
+  sizeChart    SizeChart?    @relation(fields: [sizeChartId], references: [id], onDelete: SetNull)
+  attributeSet AttributeSet? @relation(fields: [attributeSetId], references: [id], onDelete: SetNull)
+  products     Product[]
+
+  @@index([parentId])
+}
+
+/// Level 1: the global size vocabulary (labels + order only — never measurements).
+model SizeDefinition {
+  id        String   @id @default(cuid())
+  label     String   @unique
+  sortOrder Int
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  cells     SizeChartCell[]
+  variants  ProductVariant[]
+  overrides ProductSizeOverride[]
+}
+
+/// Level 2: a named, reusable measurement chart bound to categories.
+model SizeChart {
+  id         String   @id @default(cuid())
+  name       String   @unique
+  /// Ordered column keys, e.g. ["chest","waist","hip","shoulder","sleeve","length"].
+  dimensions String[]
+  createdAt  DateTime @default(now()) @db.Timestamptz
+  updatedAt  DateTime @updatedAt @db.Timestamptz
+
+  cells      SizeChartCell[]
+  categories Category[]
+}
+
+model SizeChartCell {
+  id          String   @id @default(cuid())
+  chartId     String
+  sizeId      String
+  dimension   String
+  valueInches Decimal  @db.Decimal(4, 1)
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  updatedAt   DateTime @updatedAt @db.Timestamptz
+
+  chart SizeChart      @relation(fields: [chartId], references: [id], onDelete: Cascade)
+  size  SizeDefinition @relation(fields: [sizeId], references: [id], onDelete: Restrict)
+
+  @@unique([chartId, sizeId, dimension])
+}
+
+enum AttrType {
+  SELECT
+  MULTI_SELECT
+  TEXT
+  BOOLEAN
+  NUMBER
+}
+
+model AttributeSet {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  definitions AttributeDefinition[]
+  categories  Category[]
+}
+
+model AttributeDefinition {
+  id         String   @id @default(cuid())
+  setId      String
+  key        String
+  label      String
+  type       AttrType
+  filterable Boolean  @default(false)
+  required   Boolean  @default(false)
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now()) @db.Timestamptz
+  updatedAt  DateTime @updatedAt @db.Timestamptz
+
+  set     AttributeSet            @relation(fields: [setId], references: [id], onDelete: Cascade)
+  options AttributeValueOption[]
+  values  ProductAttributeValue[]
+
+  @@unique([setId, key])
+}
+
+model AttributeValueOption {
+  id           String   @id @default(cuid())
+  definitionId String
+  value        String
+  label        String
+  sortOrder    Int      @default(0)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @db.Timestamptz
+  updatedAt    DateTime @updatedAt @db.Timestamptz
+
+  definition AttributeDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+
+  @@unique([definitionId, value])
+}
+
+// ─── Catalog ────────────────────────────────────────────────────────────────
+
+enum ProductStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model Product {
+  id             String        @id @default(cuid())
+  categoryId     String
+  name           String
+  slug           String        @unique
+  /// Product number used in SKUs: PSK-{code}-{SIZE}[-{COLOR}]. Demo rows use the DEMO- prefix.
+  code           String        @unique
+  description    String
+  pricePaisa     Int
+  compareAtPaisa Int?
+  status         ProductStatus @default(DRAFT)
+  fitNote        String?
+  isFinalSale    Boolean       @default(false)
+  publishedAt    DateTime?     @db.Timestamptz
+  /// Maintained by a trigger (see migration) for full-text search.
+  searchText     Unsupported("tsvector")?
+  createdAt      DateTime      @default(now()) @db.Timestamptz
+  updatedAt      DateTime      @updatedAt @db.Timestamptz
+
+  category       Category                @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  variants       ProductVariant[]
+  images         ProductImage[]
+  attributes     ProductAttributeValue[]
+  fabricContents FabricContent[]
+  sizeOverrides  ProductSizeOverride[]
+
+  @@index([categoryId, status])
+  @@index([publishedAt])
+}
+
+model ProductVariant {
+  id         String   @id @default(cuid())
+  productId  String
+  sizeId     String?
+  color      String?
+  sku        String   @unique
+  stock      Int      @default(0)
+  pricePaisa Int?
+  /// Variants with order history are archived instead of deleted.
+  archived   Boolean  @default(false)
+  createdAt  DateTime @default(now()) @db.Timestamptz
+  updatedAt  DateTime @updatedAt @db.Timestamptz
+
+  product      Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  size         SizeDefinition?   @relation(fields: [sizeId], references: [id], onDelete: Restrict)
+  cartItems    CartItem[]
+  orderItems   OrderItem[]
+  reservations Reservation[]
+  ledger       InventoryLedger[]
+  backInStock  BackInStockSub[]
+
+  @@unique([productId, sizeId, color])
+}
+
+model ProductImage {
+  id        String   @id @default(cuid())
+  productId String
+  url       String
+  altText   String
+  sortOrder Int      @default(0)
+  isCover   Boolean  @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+}
+
+model ProductAttributeValue {
+  productId    String
+  definitionId String
+  value        Json
+  createdAt    DateTime @default(now()) @db.Timestamptz
+  updatedAt    DateTime @updatedAt @db.Timestamptz
+
+  product    Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  definition AttributeDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+
+  @@id([productId, definitionId])
+}
+
+enum Piece {
+  SHIRT
+  DUPATTA
+  TROUSER
+}
+
+/// Unstitched pack contents ("What's in the pack").
+model FabricContent {
+  id           String   @id @default(cuid())
+  productId    String
+  piece        Piece
+  fabric       String
+  lengthMeters Decimal  @db.Decimal(3, 1)
+  /// e.g. "Shirt front", "Back & sleeves".
+  detail       String?
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now()) @db.Timestamptz
+  updatedAt    DateTime @updatedAt @db.Timestamptz
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+}
+
+/// Level 3: sparse per-product cell overrides (override ?? categoryCell).
+model ProductSizeOverride {
+  productId   String
+  sizeId      String
+  dimension   String
+  valueInches Decimal  @db.Decimal(4, 1)
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  updatedAt   DateTime @updatedAt @db.Timestamptz
+
+  product Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  size    SizeDefinition @relation(fields: [sizeId], references: [id], onDelete: Restrict)
+
+  @@id([productId, sizeId, dimension])
+}
+
+// ─── Cart ───────────────────────────────────────────────────────────────────
+
+model Cart {
+  id        String   @id @default(cuid())
+  userId    String?  @unique
+  /// Anonymous cookie id for guest carts.
+  anonId    String?  @unique
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  user  User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items CartItem[]
+}
+
+model CartItem {
+  id        String   @id @default(cuid())
+  cartId    String
+  variantId String
+  qty       Int
+  /// Unit price when added — used only to tell the shopper a price changed.
+  addedPricePaisa Int
+  addedAt   DateTime @default(now()) @db.Timestamptz
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+
+  cart    Cart           @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@unique([cartId, variantId])
+  @@index([variantId])
+}
+
+// ─── Orders (snapshot pattern) ──────────────────────────────────────────────
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PENDING
+  CONFIRMED
+  PACKED
+  SHIPPED
+  DELIVERED
+  COMPLETED
+  CANCELLED
+  RETURN_REQUESTED
+  RETURNED
+  REFUNDED
+}
+
+enum ActorType {
+  CUSTOMER
+  ADMIN
+  SYSTEM
+}
+
+model Order {
+  id             String      @id @default(cuid())
+  orderNo        String      @unique
+  userId         String?
+  guestEmail     String?
+  guestPhone     String?
+  /// Client-generated Idempotency-Key: replays return the original order.
+  idempotencyKey String?     @unique
+  status         OrderStatus
+  subtotalPaisa  Int
+  shippingPaisa  Int
+  discountPaisa  Int         @default(0)
+  totalPaisa     Int
+  contactEmail   String
+  contactPhone   String
+  shipName       String
+  shipPhone      String
+  shipLine1      String
+  shipCity       String
+  shipProvince   String?
+  shipNotes      String?
+  courier        String?
+  trackingNo     String?
+  cancelReason   String?
+  placedAt       DateTime    @default(now()) @db.Timestamptz
+  deliveredAt    DateTime?   @db.Timestamptz
+  createdAt      DateTime    @default(now()) @db.Timestamptz
+  updatedAt      DateTime    @updatedAt @db.Timestamptz
+
+  user     User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  items    OrderItem[]
+  events   OrderEvent[]
+  payments Payment[]
+  returns  ReturnRequest[]
+  reservations Reservation[]
+
+  @@index([status, placedAt])
+  @@index([userId])
+  @@index([guestEmail])
+}
+
+/// Gap-free per-month counter for PSK-YYYYMM-NNNN, incremented inside the placement transaction.
+model OrderSequence {
+  period    String   @id
+  lastValue Int
+  updatedAt DateTime @updatedAt @db.Timestamptz
+}
+
+model OrderItem {
+  id             String   @id @default(cuid())
+  orderId        String
+  variantId      String?
+  productName    String
+  productSlug    String
+  sizeLabel      String?
+  color          String?
+  sku            String
+  unitPricePaisa Int
+  qty            Int
+  imageUrl       String
+  createdAt      DateTime @default(now()) @db.Timestamptz
+  updatedAt      DateTime @updatedAt @db.Timestamptz
+
+  order       Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variant     ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  returnItems ReturnItem[]
+
+  @@index([orderId])
+}
+
+model OrderEvent {
+  id         String       @id @default(cuid())
+  orderId    String
+  fromStatus OrderStatus?
+  toStatus   OrderStatus
+  actorType  ActorType
+  actorId    String?
+  note       String?
+  createdAt  DateTime     @default(now()) @db.Timestamptz
+  updatedAt  DateTime     @updatedAt @db.Timestamptz
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+}
+
+// ─── Payments ───────────────────────────────────────────────────────────────
+
+enum PayMethod {
+  COD
+  CARD
+  BANK_TRANSFER
+}
+
+enum PayStatus {
+  PENDING
+  PAID
+  COLLECTED
+  FAILED
+  EXPIRED
+  PARTIALLY_REFUNDED
+  REFUNDED
+}
+
+model Payment {
+  id          String    @id @default(cuid())
+  orderId     String
+  method      PayMethod
+  status      PayStatus
+  amountPaisa Int
+  provider    String?
+  providerRef String?   @unique
+  proofUrl    String?
+  collectedAt DateTime? @db.Timestamptz
+  createdAt   DateTime  @default(now()) @db.Timestamptz
+  updatedAt   DateTime  @updatedAt @db.Timestamptz
+
+  order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  refunds Refund[]
+
+  @@index([orderId])
+}
+
+model Refund {
+  id          String   @id @default(cuid())
+  paymentId   String
+  amountPaisa Int
+  method      String
+  reference   String?
+  reason      String
+  actorId     String
+  createdAt   DateTime @default(now()) @db.Timestamptz
+  updatedAt   DateTime @updatedAt @db.Timestamptz
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId])
+}
+
+// ─── Returns ────────────────────────────────────────────────────────────────
+
+enum ReturnStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  RECEIVED
+  REFUNDED
+}
+
+enum QcOutcome {
+  SELLABLE
+  DAMAGED
+}
+
+model ReturnRequest {
+  id                String       @id @default(cuid())
+  orderId           String
+  status            ReturnStatus @default(REQUESTED)
+  reason            String
+  customerNote      String?
+  adminNote         String?
+  photoUrls         String[]
+  refundBankDetails Json?
+  createdAt         DateTime     @default(now()) @db.Timestamptz
+  updatedAt         DateTime     @updatedAt @db.Timestamptz
+
+  order Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  items ReturnItem[]
+
+  @@index([orderId])
+}
+
+model ReturnItem {
+  id              String     @id @default(cuid())
+  returnRequestId String
+  orderItemId     String
+  qty             Int
+  qcOutcome       QcOutcome?
+  createdAt       DateTime   @default(now()) @db.Timestamptz
+  updatedAt       DateTime   @updatedAt @db.Timestamptz
+
+  returnRequest ReturnRequest @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+  orderItem     OrderItem     @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+}
+
+// ─── Inventory & ops ────────────────────────────────────────────────────────
+
+enum ResStatus {
+  ACTIVE
+  CONVERTED
+  RELEASED
+}
+
+/// Dormant until online payments ship (COD decrements stock directly).
+model Reservation {
+  id        String    @id @default(cuid())
+  variantId String
+  orderId   String
+  qty       Int
+  status    ResStatus @default(ACTIVE)
+  expiresAt DateTime  @db.Timestamptz
+  createdAt DateTime  @default(now()) @db.Timestamptz
+  updatedAt DateTime  @updatedAt @db.Timestamptz
+
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  order   Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([status, expiresAt])
+}
+
+enum LedgerSource {
+  ORDER
+  CANCEL
+  RETURN
+  ADMIN
+  SYSTEM
+}
+
+/// Append-only. variant.stock must always equal Σ delta.
+model InventoryLedger {
+  id           String       @id @default(cuid())
+  variantId    String
+  delta        Int
+  reason       String
+  source       LedgerSource
+  refId        String?
+  actorId      String?
+  balanceAfter Int
+  createdAt    DateTime     @default(now()) @db.Timestamptz
+  updatedAt    DateTime     @updatedAt @db.Timestamptz
+
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@index([variantId, createdAt])
+}
+
+model ShippingZone {
+  id           String   @id @default(cuid())
+  city         String   @unique
+  zone         String
+  feePaisa     Int
+  estimateText String
+  expressAvailable Boolean @default(false)
+  active       Boolean  @default(true)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now()) @db.Timestamptz
+  updatedAt    DateTime @updatedAt @db.Timestamptz
+}
+
+model StoreConfig {
+  key       String   @id
+  value     Json
+  createdAt DateTime @default(now()) @db.Timestamptz
+  updatedAt DateTime @updatedAt @db.Timestamptz
+}
+
+enum ColType {
+  MANUAL
+  AUTO_NEW
+  AUTO_SALE
+}
+
+model Collection {
+  id         String   @id @default(cuid())
+  name       String
+  slug       String   @unique
+  type       ColType  @default(MANUAL)
+  bannerUrls Json?
+  productIds String[]
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now()) @db.Timestamptz
+  updatedAt  DateTime @updatedAt @db.Timestamptz
+}
+
+model BackInStockSub {
+  id         String    @id @default(cuid())
+  variantId  String
+  email      String
+  notifiedAt DateTime? @db.Timestamptz
+  createdAt  DateTime  @default(now()) @db.Timestamptz
+  updatedAt  DateTime  @updatedAt @db.Timestamptz
+
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@unique([variantId, email])
+}

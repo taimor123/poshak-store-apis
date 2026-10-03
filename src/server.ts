@@ -1,17 +1,21 @@
 import { createApp } from './app.js';
-import { loadEnv } from './config/env.js';
+import { env } from './config/env.js';
+import { disconnect } from './db.js';
+import { startScheduler } from './jobs/scheduler.js';
 import { logger } from './logger.js';
 
-const env = loadEnv();
-const server = createApp(env).listen(env.PORT, () => {
-  logger.info({ port: env.PORT, env: env.NODE_ENV }, 'poshak-store-apis listening');
+const config = env();
+const server = createApp(config).listen(config.PORT, () => {
+  logger.info({ port: config.PORT, env: config.NODE_ENV }, 'poshak-store-apis listening');
 });
+const scheduler = config.DISABLE_CRON ? null : startScheduler();
 
-// Graceful shutdown so in-flight requests (and, later, transactions) finish.
+// Graceful shutdown so in-flight requests and transactions finish.
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
     logger.info({ signal }, 'shutting down');
-    server.close(() => process.exit(0));
+    void scheduler?.stop();
+    server.close(() => void disconnect().finally(() => process.exit(0)));
     setTimeout(() => process.exit(1), 10_000).unref();
   });
 }

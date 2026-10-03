@@ -19,7 +19,7 @@ export const ERROR_CODES = [
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
 export const HTTP_STATUS: Record<ErrorCode, number> = {
-  VALIDATION: 400,
+  VALIDATION: 422,
   UNAUTHORIZED: 401,
   FORBIDDEN: 403,
   NOT_FOUND: 404,
@@ -51,18 +51,53 @@ export class DomainError extends Error {
     readonly details?: unknown,
   ) {
     super(message);
-    this.name = 'DomainError';
-  }
-}
-
-export class NotFoundError extends DomainError {
-  constructor(message = 'Not found') {
-    super('NOT_FOUND', message);
+    this.name = new.target.name;
   }
 }
 
 export class ValidationError extends DomainError {
   constructor(fieldErrors: Record<string, string>, message = 'Some fields need attention') {
     super('VALIDATION', message, fieldErrors);
+  }
+}
+export class UnauthorizedError extends DomainError {
+  constructor(message = 'Please sign in to continue') {
+    super('UNAUTHORIZED', message);
+  }
+}
+export class ForbiddenError extends DomainError {
+  constructor(message = 'You don’t have access to this') {
+    super('FORBIDDEN', message);
+  }
+}
+export class NotFoundError extends DomainError {
+  constructor(message = 'Not found') {
+    super('NOT_FOUND', message);
+  }
+}
+export class VariantGoneError extends DomainError {
+  constructor(message = 'This item is no longer available') {
+    super('VARIANT_GONE', message);
+  }
+}
+export type StockConflictLine = { variantId: string; requested: number; available: number };
+export class StockConflictError extends DomainError {
+  constructor(lines: StockConflictLine[]) {
+    super('STOCK_CONFLICT', 'Some items no longer have enough stock', undefined, { lines });
+  }
+}
+export class PriceMismatchError extends DomainError {
+  constructor(serverTotalPaisa: number) {
+    super('PRICE_MISMATCH', 'Prices changed since you opened checkout. Please review your order.', undefined, { totalPaisa: serverTotalPaisa });
+  }
+}
+export class IllegalTransitionError extends DomainError {
+  constructor(from: string, to: string) {
+    super('ILLEGAL_TRANSITION', `An order can’t move from ${from} to ${to}`, undefined, { from, to });
+  }
+}
+export class RateLimitedError extends DomainError {
+  constructor(message = 'Too many attempts. Please wait a little and try again.') {
+    super('RATE_LIMITED', message);
   }
 }

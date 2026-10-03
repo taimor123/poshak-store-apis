@@ -1,0 +1,47 @@
+# Local stack. `docker compose up -d db` for development (API runs on the host with `npm run dev`);
+# `docker compose up -d --build` runs the API in a container too.
+services:
+  db:
+    image: postgres:16
+    container_name: poshak-apis-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: poshak
+      POSTGRES_PASSWORD: poshak
+      POSTGRES_DB: poshak
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U poshak"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: .
+    container_name: poshak-apis
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://poshak:poshak@db:5432/poshak
+      WEB_ORIGIN: http://localhost:3000
+      SITE_URL: http://localhost:3000
+      JWT_SECRET: dev-only-jwt-secret-change-me-0123456789abcdef
+      GUEST_TOKEN_SECRET: dev-only-guest-secret-change-me-0123456789abcdef
+      COOKIE_SECURE: "false"
+      RUN_MIGRATIONS: "true"
+      SEED_ON_START: "true"
+      SEED_ADMIN_EMAIL: admin@poshak.pk
+      SEED_ADMIN_PASSWORD: change-me-on-first-login
+      DISABLE_CRON: "false"
+    ports:
+      - "4000:4000"
+
+volumes:
+  pgdata:

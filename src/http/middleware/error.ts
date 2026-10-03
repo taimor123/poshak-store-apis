@@ -1,5 +1,6 @@
 import type { ErrorRequestHandler, RequestHandler } from 'express';
 import { ZodError } from 'zod';
+import { fieldErrorsOf } from '../../validation/parse.js';
 import { DomainError, HTTP_STATUS, type Envelope } from '../errors.js';
 
 /** Unknown route → NOT_FOUND envelope. */
@@ -23,8 +24,7 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
     return;
   }
   if (err instanceof ZodError) {
-    const fieldErrors = Object.fromEntries(err.issues.map((i) => [i.path.join('.') || '_', i.message]));
-    res.status(400).json({ ok: false, error: { code: 'VALIDATION', message: 'Some fields need attention', fieldErrors } } satisfies Envelope<never>);
+    res.status(422).json({ ok: false, error: { code: 'VALIDATION', message: 'Some fields need attention', fieldErrors: fieldErrorsOf(err) } } satisfies Envelope<never>);
     return;
   }
   // Malformed JSON bodies from express.json()
